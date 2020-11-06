@@ -1273,12 +1273,20 @@ if __name__ == "__main__":
     # Step 1: Create MLGrampsConnect object and load family tree (XML) 
     # -------------------------------------------------------------------
     
-    # Get the current directory where this python is stored when rum
+    # Get the current directory where this python is stored when run
     cur_dir_path = os.path.dirname(os.path.realpath(__file__))
+
+    # Set selected gramps xml backup
+    gramps_filename = cur_dir_path + "/" + "gramps.xml"
+
+    # Check whether the gramps xml backup file exists
+    found = os.path.isfile(gramps_filename)
+    if not found:
+        sys.exit(gramps_filename + " is not found")
     
     # Init a MLGrampsObject and load a Gramps XML Backup with a familytree
     mlgc = MLGrampsConnect()
-    mlgc.load(cur_dir_path + "/" + "gramps.xml")
+    mlgc.load(gramps_filename)
 
     # ---------------------------------------------------------------------
     # Step 2: Get person_list 
