@@ -1,8 +1,8 @@
 # ==========================================
 # File      : MLGrampsConnect.py
 # Project   : ML_Genealogy053
-# Task      : A017
-# Date      : 07/11/2020
+# Task      : A018
+# Date      : 14/11/2020
 # Author    : Dirk J. van der Veen
 # ==========================================
 
@@ -69,14 +69,15 @@ TARGET_FIELDNAME = "Linktype"
 PERSON_CONNECTION_INDEX_FIELDNAMES = ("conn_start_idx", "n_known_conn", "n_rand_conn")     
 
 _ARG_PERSONLINK_MLFEATURE_LIST = 0
-_ARG_PERSONLINK_INCLUDE_NONE_DATES = 1
-_ARG_PERSONLINK_MAX_ABS_AGE_DELTA = 2
-_ARG_PERSONLINK_MAINPERSON_INDEX = 3
-_ARG_PERSONLINK_MAINPERSON = 4
-_ARG_PERSONLINK_LINKPERSON_INDEX = 5
-_ARG_PERSONLINK_LINKPERSON = 6
-_ARG_PERSONLINK_LINKTYPE = 7
-_ARG_PERSONLINK_AGE_DELTA = 8
+_ARG_PERSONLINK_NAME_SIMILARITY_MODE = 1
+_ARG_PERSONLINK_INCLUDE_NONE_DATES = 2
+_ARG_PERSONLINK_MAX_ABS_AGE_DELTA = 3
+_ARG_PERSONLINK_MAINPERSON_INDEX = 4
+_ARG_PERSONLINK_MAINPERSON = 5
+_ARG_PERSONLINK_LINKPERSON_INDEX = 6
+_ARG_PERSONLINK_LINKPERSON = 7
+_ARG_PERSONLINK_LINKTYPE = 8
+_ARG_PERSONLINK_AGE_DELTA = 9
 
 
 ###################################################################
@@ -426,6 +427,7 @@ def create_personlink(args: tuple) -> tuple:
     # called in the multiprocess pool/map construction
 
     mlfeature_list = args[_ARG_PERSONLINK_MLFEATURE_LIST]
+    name_similarity_mode = args[_ARG_PERSONLINK_NAME_SIMILARITY_MODE]
     include_none_dates = args[_ARG_PERSONLINK_INCLUDE_NONE_DATES]
     max_abs_age_delta = args[_ARG_PERSONLINK_MAX_ABS_AGE_DELTA]
 
@@ -446,6 +448,7 @@ def create_personlink(args: tuple) -> tuple:
             result = True
         else:
             featurevalue, result = mlfeature.get_value(mainperson, linkperson, linktype,
+                name_similarity_mode=name_similarity_mode,
                 include_none_dates=include_none_dates,
                 max_abs_age_delta=max_abs_age_delta)
         if result:
@@ -488,6 +491,7 @@ class MLFeatureAgeDelta(MLFeature):
         return "Age Delta"
         
     def get_value(self, mainperson, linkperson, linktype,
+                  name_similarity_mode: str,
                   include_none_dates: bool,
                   max_abs_age_delta: int):
         # TODO For now, to train the model only connections with known birth_dates
@@ -524,6 +528,7 @@ class MLFeatureGenderCombination(MLFeature):
         return "Gender Combination"
         
     def get_value(self, mainperson, linkperson, linktype,
+                  name_similarity_mode: str,
                   include_none_dates: bool,
                   max_abs_age_delta: int):
         """ Get the combination of the gender of two persons
@@ -550,6 +555,7 @@ class MLFeatureKnownLinktype(MLFeature):
         return "Known Linktype"
         
     def get_value(self, mainperson, linkperson, linktype,
+                  name_similarity_mode: str,
                   include_none_dates: bool,
                   max_abs_age_delta: int):
         """ Set to 1 if the linktype is known, otherwise set to 0
@@ -577,6 +583,7 @@ class MLFeatureNSiblingsEquality(MLFeature):
         return "Number of Siblings Equality"
         
     def get_value(self, mainperson, linkperson, linktype,
+                  name_similarity_mode: str,
                   include_none_dates: bool,
                   max_abs_age_delta: int):
         """ Get the equality, depending of linktype, between the number of nsiblings
@@ -632,6 +639,7 @@ class MLFeatureOccupationCorrespondence(MLFeature):
         return "Occupation Correspondence"
 
     def get_value(self, mainperson, linkperson, linktype,
+                  name_similarity_mode: str,
                   include_none_dates: bool,
                   max_abs_age_delta: int):
         result = True
@@ -655,6 +663,7 @@ class MLFeatureResidenceCorrespondence(MLFeature):
         return "Residence Correspondence"
 
     def get_value(self, mainperson, linkperson, linktype,
+                  name_similarity_mode: str,
                   include_none_dates: bool,
                   max_abs_age_delta: int):
         result = True
@@ -678,10 +687,15 @@ class MLFeatureSurnameSimilarity(MLFeature):
         return "Surname Similarity"
 
     def get_value(self, mainperson, linkperson, linktype,
+                  name_similarity_mode: tuple,
                   include_none_dates: bool,
                   max_abs_age_delta: int):
         """ Get the similarity between two names (which could consist of several names
             parts) based on the Levenmshtein distance
+
+            name_similarity_mode: ('LevenshteinDistance', threshold)
+            name_similarity_mode: ('LevenshteinDistanceBool', threshold)
+            name_similarity_mode: ('LevenshteinDistanceRelative', threshold)
         """
         surname_similarity = 0.0
         result = True
@@ -689,15 +703,67 @@ class MLFeatureSurnameSimilarity(MLFeature):
         mainperson_name_list = mainperson[COL_PERSON_NAME_LIST]
         linkperson_name_list = linkperson[COL_PERSON_NAME_LIST]
 
-        threshold = _LEVENSHTEIN_DISTANCE_THRESHOLD
-        min_partdistance = threshold
-        for mainfullsurname in mainperson_name_list:
-            for linkfullsurname in linkperson_name_list:
-                partdistance = Levenshtein._levenshtein.distance(mainfullsurname, linkfullsurname)
-                if partdistance < min_partdistance:
-                    min_partdistance = partdistance
-        if min_partdistance < threshold:
-            surname_similarity = round(1 - (min_partdistance / threshold), 2)
+        # The default method is None, which means no check at all and the outcome is 0.0
+        # For all methods the default threshold is 0 which means only exacts matches are count for 1.0
+        similarity_method = name_similarity_mode[0]
+        threshold = name_similarity_mode[1]
+
+        if similarity_method == 'LevenshteinDistance':
+            min_distance = threshold + 1
+            for mainfullsurname in mainperson_name_list:
+                for linkfullsurname in linkperson_name_list:
+                    distance = Levenshtein._levenshtein.distance(mainfullsurname, linkfullsurname)
+                    if distance < min_distance:
+                        min_distance = distance
+            if min_distance <= threshold:
+                if threshold != 0:
+                    surname_similarity = round(1 - (min_distance / threshold), 2)
+                else:
+                    surname_similarity = 1.0
+        elif similarity_method == 'LevenshteinDistanceBool':
+            min_distance = threshold + 1
+            for mainfullsurname in mainperson_name_list:
+                for linkfullsurname in linkperson_name_list:
+                    distance = Levenshtein._levenshtein.distance(mainfullsurname, linkfullsurname)
+                    if distance < min_distance:
+                        min_distance = distance
+            if min_distance <= threshold:
+                surname_similarity = 1.0                
+        elif similarity_method == 'LevenshteinDistanceRelative':
+            # max_similarity_score = 0
+            # for mainfullsurname in mainperson_name_list:
+            #     lenghtofmainname = len(mainfullsurname)
+            #     max_distance = round(threshold * lenghtofmainname)
+            #     if max_distance == 0:
+            #         max_distance = 1
+            #     for linkfullsurname in linkperson_name_list:
+            #         similarity_score = round(1 - (Levenshtein._levenshtein.distance(mainfullsurname, linkfullsurname) /
+            #                                       (threshold * lenghtofmainname)), 2)
+            #         if similarity_score < 0:
+            #             similarity_score = 0
+            #         if similarity_score > max_similarity_score:
+            #             max_similarity_score = similarity_score
+            # surname_similarity = max_similarity_score
+            
+            for mainfullsurname in mainperson_name_list:
+                similarity = 0.0
+                # rel_threshold = round(threshold * (len(mainfullsurname) / 6))
+                rel_threshold = len(mainfullsurname)
+                min_distance = rel_threshold + 1
+                for linkfullsurname in linkperson_name_list:
+                    distance = Levenshtein._levenshtein.distance(mainfullsurname, linkfullsurname)
+                    if distance < min_distance:
+                        min_distance = distance
+                if min_distance <= rel_threshold:
+                    if rel_threshold != 0:
+                        similarity = round(1 - (min_distance / rel_threshold), 2)
+                    else:
+                        similarity = 1.0
+                if similarity > surname_similarity:
+                    surname_similarity = similarity           
+        else:
+            surname_similarity = 0.0
+            result = False
 
         return (surname_similarity, result)
 
@@ -968,13 +1034,16 @@ class MLGrampsConnect:
     def get_connection_list(self, person_list: list,
                                   features: tuple, 
                                   linktype_mode: str = 'ByGender',
+                                  name_similarity_mode: tuple = ('LevenshteinDistanceRelative', _LEVENSHTEIN_DISTANCE_THRESHOLD),
                                   n_random_conn_pp: int = 0,
+                                  randomseed: int = None,
                                   include_none_dates: bool = False,
                                   max_abs_age_delta: int = ABS_AGE_DELTA_ONE_GENERATION) -> (list, list, list):
         """ person_list: input data
             features: tuple of features examined in the input and added as columns in the output
             linktype_mode: 'ByGender' | 'Neutral' (default: 'ByGender')
             n_randompp: int (default: 0)
+            randomseed: int (default: None)
             include_none_dates: bool (default: False)
                 Include connection for which the birth_date of one or both persons
                 is None. In include such connection the Age Delta cound not be calculated.
@@ -995,6 +1064,9 @@ class MLGrampsConnect:
         else:
             random_connections_per_person = 0
         add_random_connections = random_connections_per_person > 0
+        # if random connections has to be added, check whether random.seed has to be set
+        if add_random_connections:
+            random.seed(a=randomseed)
 
         # init loop
         n_person = len(person_list)
@@ -1042,6 +1114,7 @@ class MLGrampsConnect:
                     result = False
                     for mlfeature in mlfeature_list:
                         featurevalue, result = mlfeature.get_value(mainperson, linkperson, linktype,
+                            name_similarity_mode=name_similarity_mode,
                             include_none_dates=include_none_dates,
                             max_abs_age_delta=max_abs_age_delta)
                         if result:
@@ -1084,6 +1157,7 @@ class MLGrampsConnect:
                         result = False
                         for mlfeature in mlfeature_list:
                             featurevalue, result = mlfeature.get_value(mainperson, linkperson, linktype,
+                                name_similarity_mode=name_similarity_mode,
                                 include_none_dates=include_none_dates,
                                 max_abs_age_delta=max_abs_age_delta)
                             if result:
@@ -1107,6 +1181,7 @@ class MLGrampsConnect:
                             connection_list: list = None,
                             person_connection_index_list: list = None,
                             features: tuple = None, 
+                            name_similarity_mode: tuple = ("LevenshteinDistanceRelative", _LEVENSHTEIN_DISTANCE_THRESHOLD),
                             include_none_dates: bool = False,
                             max_abs_age_delta: int = ABS_AGE_DELTA_ONE_GENERATION,
                             n_proc: int = -1) -> list:
@@ -1123,6 +1198,7 @@ class MLGrampsConnect:
         def get_personlink_args(mlfeature_list, mainperson, mp_idx: int, lp_idx: int,
                                 linktype: str = None,
                                 lp_idx_list: list = None,
+                                name_similarity_mode: tuple = None,
                                 include_none_dates: bool = False,
                                 max_abs_age_delta: int = ABS_AGE_DELTA_ONE_GENERATION):
             args = None
@@ -1133,6 +1209,7 @@ class MLGrampsConnect:
             for mlfeature in mlfeature_list:
                 if mlfeature.get_name().lower() == "agedelta":
                     age_delta, result = mlfeature.get_value(mainperson, linkperson, linktype,
+                        name_similarity_mode=name_similarity_mode,
                         include_none_dates=include_none_dates,
                         max_abs_age_delta=max_abs_age_delta)
                     if result:
@@ -1140,6 +1217,7 @@ class MLGrampsConnect:
                         # and links that belongs to the connection_list
                         if (mp_idx != lp_idx) and (lp_idx not in lp_idx_list):
                             args = (mlfeature_list,
+                                    name_similarity_mode,
                                     include_none_dates,
                                     max_abs_age_delta,
                                     mp_idx, person_list[mp_idx],
@@ -1211,6 +1289,7 @@ class MLGrampsConnect:
                 args = get_personlink_args(mlfeature_list, mainperson, mp_idx, lp_idx,
                                            linktype=linktype,
                                            lp_idx_list=lp_idx_list,
+                                           name_similarity_mode=name_similarity_mode,
                                            include_none_dates=include_none_dates,
                                            max_abs_age_delta=max_abs_age_delta)
                 if args:
@@ -1232,6 +1311,7 @@ class MLGrampsConnect:
                 args = get_personlink_args(mlfeature_list, mainperson, mp_idx, lp_idx,
                                            linktype=linktype,
                                            lp_idx_list=lp_idx_list,
+                                           name_similarity_mode=name_similarity_mode,
                                            include_none_dates=include_none_dates,
                                            max_abs_age_delta=max_abs_age_delta)
                 if args:
@@ -1341,15 +1421,9 @@ if __name__ == "__main__":
                       FEAT_AGE_DELTA,
                       FEAT_SURNAME_SIMILARITY,
                       FEAT_OCCUPATION_CORRESPONDENCE,
-                      FEAT_RESIDENCE_CORRESPONDENCE
-                     ),
-                     (FEAT_GENDER_COMBINATION,
-                      FEAT_AGE_DELTA,
-                      FEAT_SURNAME_SIMILARITY,
-                      FEAT_OCCUPATION_CORRESPONDENCE,
                       FEAT_RESIDENCE_CORRESPONDENCE,
                       FEAT_N_SIBLINGS_EQUALITY
-                     )
+                     ),
                     )
     # temp_linktype_modes = ('ByGender', 'Neutral')
     temp_linktype_modes = ('ByGender',)
@@ -1371,7 +1445,9 @@ if __name__ == "__main__":
                     mlgc.get_connection_list(person_list=person_list,
                                              features=features_set,
                                              linktype_mode=linktype_mode,
+                                             name_similarity_mode=('LevenshteinDistanceRelative', 3),
                                              n_random_conn_pp=n_random_conn_pp,
+                                             randomseed=None,
                                              max_abs_age_delta=ABS_AGE_DELTA_ONE_GENERATION)
                 print("{} | Number of connections: {:,} - (Features: {}, Linktype: {}, n_random_conn_pp: {})".format(
                     datetime.now() - now_begin, len(connection_list),
@@ -1406,6 +1482,7 @@ if __name__ == "__main__":
                     mlgc.get_personlink_list(person_list, connection_list,
                         person_connection_index_list,
                         features=features_set,
+                        name_similarity_mode=('LevenshteinDistanceBool', 3),
                         include_none_dates=False,
                         max_abs_age_delta=ABS_AGE_DELTA_ONE_GENERATION, n_proc=-1)
                 print("{} | Number of personlinks: {:,}".format(
