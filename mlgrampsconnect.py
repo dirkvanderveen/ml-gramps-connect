@@ -1,8 +1,8 @@
 # ==========================================
 # File      : MLGrampsConnect.py
 # Project   : ML_Genealogy053
-# Task      : A018
-# Date      : 14/11/2020
+# Task      : A019
+# Date      : 25/11/2020
 # Author    : Dirk J. van der Veen
 # ==========================================
 
@@ -60,9 +60,9 @@ COL_PERSON_CONNECTION_INDEX_NRANDCONN = 2
 COL_PERSONLINK_MAININDEX = 0
 COL_PERSONLINK_LINKINDEX = 1
 
-PERSON_FIELDNAMES = ("Person Handle", "Person ID", "Names List",
-                     "Gender", "Birth Date", "Occupation",
-                     "Residence", "Relatives List")
+COL_OCCUPATION_TABLE_SECTOR = 0
+COL_OCCUPATION_TABLE_PROFESSION = 1
+COL_OCCUPATION_TABLE_OCCUPATION = 2
 
 MAIN_LINK_PERSON_FIELDNAMES = ("Main Person Index", "Link Person Index")
 TARGET_FIELDNAME = "Linktype"
@@ -78,6 +78,7 @@ _ARG_PERSONLINK_LINKPERSON_INDEX = 6
 _ARG_PERSONLINK_LINKPERSON = 7
 _ARG_PERSONLINK_LINKTYPE = 8
 _ARG_PERSONLINK_AGE_DELTA = 9
+_ARG_PERSONLINK_KWARGS_FEATURES = 10
 
 
 ###################################################################
@@ -160,6 +161,15 @@ def linktype_inttostr_mapping(linktype_mode: str,
 #
 ###################################################################
 
+def filter_duplicates_and_special_words(filter_lists: tuple,
+                                        text_list: list) -> list:
+    # delete duplicates
+    text_list = list(dict.fromkeys(text_list))
+    # filter items from lists
+    for filter_list in filter_lists:
+        text_list = list(filter(lambda text: text not in filter_list, text_list))
+    return text_list
+
 def get_handle_list(elem, xmlns, child_tag: str, attrib_tag: str) -> list:
     handle_list = []
     # get child element(s)
@@ -210,6 +220,21 @@ def save_list_as_csv(filename: str, list: list, column_headings: list):
         writer = csv.writer(f)
         writer.writerow(column_headings)
         writer.writerows(list)
+
+def import_list_from_csv(filename: str, has_heading: bool, delimiter: str = ",") -> (list, tuple):
+    with open(filename, newline='') as f:
+        reader = csv.reader(f, delimiter=delimiter)
+        # imported_list = list(reader)
+        imported_list = [tuple(row) for row in reader]
+
+        if has_heading:
+            l = len(imported_list)
+            if l > 0:
+                imported_heading = imported_list[0]
+            if l > 1:
+                imported_list = imported_list[1:]
+
+    return (imported_list, imported_heading)
 
 
 ###################################################################
@@ -305,6 +330,35 @@ def get_age_delta_inyears(firstdate: str, lastdate: str,
         result = True
 
     return (age_delta_inyears, result)
+
+
+###################################################################
+#
+# Text Functions
+#
+###################################################################
+
+def replace_words(replacement_list: list, text: str) -> str:
+    # replace typos, etc. (this is case-sensitive!)
+    for replacement in replacement_list:
+        if replacement[0] in text:
+            text = text.replace(replacement[0], replacement[1])
+    # delete characters
+    text = text.replace('"', ' ')
+    text = text.replace(',', ' ')
+    text = text.replace('(', ' ')
+    text = text.replace(')', ' ')
+    text = text.replace('.', ' ')
+    text = text.replace('-', ' ')
+    text = text.replace('&', ' ')
+    text = text.replace("'", ' ')
+    text = text.replace('?', ' ')
+    text = text.replace('/', ' ')
+    # delete digits
+    for digit in range(10):
+        text = text.replace(str(digit), ' ')
+    # return result
+    return text
 
 
 ###################################################################
@@ -437,7 +491,9 @@ def create_personlink(args: tuple) -> tuple:
     linkperson = args[_ARG_PERSONLINK_LINKPERSON]
     linktype = args[_ARG_PERSONLINK_LINKTYPE]
     age_delta = args[_ARG_PERSONLINK_AGE_DELTA]
-
+    
+    kwargs_features = args[_ARG_PERSONLINK_KWARGS_FEATURES]
+    
     # create and add personlink
     personlink = (mainperson_index, linkperson_index, linktype)
     # calc all feature values for this specific connection_list
@@ -450,7 +506,8 @@ def create_personlink(args: tuple) -> tuple:
             featurevalue, result = mlfeature.get_value(mainperson, linkperson, linktype,
                 name_similarity_mode=name_similarity_mode,
                 include_none_dates=include_none_dates,
-                max_abs_age_delta=max_abs_age_delta)
+                max_abs_age_delta=max_abs_age_delta,
+                **kwargs_features)
         if result:
             personlink = personlink + (featurevalue,)
         else:
@@ -493,7 +550,8 @@ class MLFeatureAgeDelta(MLFeature):
     def get_value(self, mainperson, linkperson, linktype,
                   name_similarity_mode: str,
                   include_none_dates: bool,
-                  max_abs_age_delta: int):
+                  max_abs_age_delta: int,
+                  **kwargs_occupation_correespondence):
         # TODO For now, to train the model only connections with known birth_dates
         # will be used. This can later be changed to also include
         # persons with unknown birthdates to reflect better real life data
@@ -530,7 +588,8 @@ class MLFeatureGenderCombination(MLFeature):
     def get_value(self, mainperson, linkperson, linktype,
                   name_similarity_mode: str,
                   include_none_dates: bool,
-                  max_abs_age_delta: int):
+                  max_abs_age_delta: int,
+                  **kwargs_occupation_corresponence):
         """ Get the combination of the gender of two persons
         """
         gender_combination = None
@@ -557,7 +616,8 @@ class MLFeatureKnownLinktype(MLFeature):
     def get_value(self, mainperson, linkperson, linktype,
                   name_similarity_mode: str,
                   include_none_dates: bool,
-                  max_abs_age_delta: int):
+                  max_abs_age_delta: int,
+                  **kwargs_features):
         """ Set to 1 if the linktype is known, otherwise set to 0
         """
         result = True
@@ -585,7 +645,8 @@ class MLFeatureNSiblingsEquality(MLFeature):
     def get_value(self, mainperson, linkperson, linktype,
                   name_similarity_mode: str,
                   include_none_dates: bool,
-                  max_abs_age_delta: int):
+                  max_abs_age_delta: int,
+                  **kwargs_features):
         """ Get the equality, depending of linktype, between the number of nsiblings
         """
         def get_nsiblings(relatives: tuple, linktype: str) -> int:
@@ -641,13 +702,91 @@ class MLFeatureOccupationCorrespondence(MLFeature):
     def get_value(self, mainperson, linkperson, linktype,
                   name_similarity_mode: str,
                   include_none_dates: bool,
-                  max_abs_age_delta: int):
+                  max_abs_age_delta: int,
+                  **kwargs_features):
+
+        def get_occupation_list(occupation: str) -> list:
+            occupation_replacement_table = kwargs_features['occupation_replacement_table']
+            stopword_words_list = kwargs_features['stopword_words_list']
+            place_words_list = kwargs_features['place_words_list']
+            occupation_exclude_words_list = kwargs_features['occupation_exclude_words_list']
+
+            occupation_list = []
+            occupation = replace_words(occupation_replacement_table, occupation)
+            # split occupation string in words
+            for occupation_word in occupation.split():
+                # occupation_list.append((occupation_word.lower(),))
+                occupation_list.append(occupation_word.lower())
+
+            # Filter duplicates and words from (in this order) stop_words_list,
+            # place_words_list and occupation_exclude_words_list     
+            occupation_list = filter_duplicates_and_special_words(
+                (stopword_words_list, place_words_list, occupation_exclude_words_list),
+                occupation_list)
+            return occupation_list
+
+        # set parameter use_occupation_table
+        use_occupation_table = kwargs_features['use_occupation_table']
+        # set parameter occupation_table
+        occupation_table = kwargs_features['occupation_table']
+        
+        # seet a defaukt if the parameter was not found (or is None)
+        if use_occupation_table is None:
+            use_occupation_table = False
+        
         result = True
 
         mainperson_occupation = mainperson[COL_PERSON_OCCUPATION]
         linkperson_occupation = linkperson[COL_PERSON_OCCUPATION]
 
-        occupation_correspondence = get_valuedatelist_correspondence(mainperson_occupation, linkperson_occupation)
+        if use_occupation_table:
+            occupation_correspondence = 0.0
+            if mainperson_occupation and linkperson_occupation:
+                if (mainperson_occupation != "") or (linkperson_occupation != ""):
+                    mainperson_occupation_list = get_occupation_list(mainperson_occupation)
+                    linkperson_occupation_list = get_occupation_list(linkperson_occupation)
+
+                    for main_occupation in mainperson_occupation_list:
+                        occupation_itm, occupation_idx = get_listitem_from_list_by_handle(
+                            occupation_table, main_occupation, COL_OCCUPATION_TABLE_OCCUPATION)
+                        if not occupation_itm is None:
+                            main_profession = occupation_itm[COL_OCCUPATION_TABLE_PROFESSION]
+                            main_sector = occupation_itm[COL_OCCUPATION_TABLE_SECTOR]
+                        else:
+                            main_profession = None
+                            main_sector = None
+                            
+                        for link_occupation in linkperson_occupation_list:
+                            occupation_itm, occupation_idx = get_listitem_from_list_by_handle(
+                                occupation_table, link_occupation, COL_OCCUPATION_TABLE_OCCUPATION)
+                            if not occupation_itm is None:
+                                link_profession = occupation_itm[COL_OCCUPATION_TABLE_PROFESSION]
+                                link_sector = occupation_itm[COL_OCCUPATION_TABLE_SECTOR]
+                            else:
+                                link_profession = None
+                                link_sector = None
+
+                            correspondence = 0.0
+                            if main_occupation and (main_occupation == link_occupation):
+                                # correspondence += 0.34
+                                correspondence += 0.10
+                            if main_profession and (main_profession == link_profession):
+                                # correspondence += 0.33
+                                correspondence += 0.10
+                            if main_sector and (main_sector == link_sector):
+                                # correspondence += 0.33
+                                correspondence += 0.80
+
+                            if correspondence > occupation_correspondence:
+                                occupation_correspondence = correspondence
+                            
+                            # if correspondence == 0.34:
+                            #     print("{} - {} - {} = {} - {} - {} = {} - {}".format(main_occupation, main_profession, main_sector,
+                            #                                                             link_occupation, link_profession, link_sector,
+                            #                                                             correspondence, occupation_correspondence))
+
+        else:
+            occupation_correspondence = get_valuedatelist_correspondence(mainperson_occupation, linkperson_occupation)
         
         return (occupation_correspondence, result)
 
@@ -665,7 +804,8 @@ class MLFeatureResidenceCorrespondence(MLFeature):
     def get_value(self, mainperson, linkperson, linktype,
                   name_similarity_mode: str,
                   include_none_dates: bool,
-                  max_abs_age_delta: int):
+                  max_abs_age_delta: int,
+                  **kwargs_features):
         result = True
 
         mainperson_residence = mainperson[COL_PERSON_RESIDENCE]
@@ -689,7 +829,8 @@ class MLFeatureSurnameSimilarity(MLFeature):
     def get_value(self, mainperson, linkperson, linktype,
                   name_similarity_mode: tuple,
                   include_none_dates: bool,
-                  max_abs_age_delta: int):
+                  max_abs_age_delta: int,
+                  **kwargs_features):
         """ Get the similarity between two names (which could consist of several names
             parts) based on the Levenmshtein distance
 
@@ -864,10 +1005,68 @@ class MLGrampsConnect:
                 mlfeature_list.append(mlfeature)
         return mlfeature_list
 
+    def get_occupation_list(self, occupation_replacement_table: list,
+                                  stopword_words_list,
+                                  place_words_list,
+                                  occupation_exclude_words_list,
+                                  sort: str = None):
+        _OCCUPATION_FIELDNAMES = ('Name',)
+
+        # # Load occupation replacements
+        # occupation_replacement_table_csv = cur_dir_path + "/" + "occupation_replacement_table.csv"
+        # occupation_replacement_table, occupation_replacement_headings = import_list_from_csv(occupation_replacement_table_csv, has_heading=True)
+        
+        # # Load stopwords
+        # stopword_table_csv = cur_dir_path + "/" + "stopword_table.csv"
+        # stopword_table, stopword_headings = import_list_from_csv(stopword_table_csv, has_heading=True)
+        # stopword_words_list = [stopword[0].lower() for stopword in stopword_table]
+
+        # # Load places
+        # place_table_csv = cur_dir_path + "/" + "place_table.csv"
+        # place_table, place_headings = import_list_from_csv(place_table_csv, has_heading=True)
+        # place_words_list = [place[0].lower() for place in place_table]
+
+        # # Load occupation excludes
+        # occupation_exclude_table_csv = cur_dir_path + "/" + "occupation_exclude_table.csv"
+        # occupation_exclude_table, occupation_exclude_headings = import_list_from_csv(occupation_exclude_table_csv, has_heading=True)
+        # occupation_exclude_words_list = [occupation_exclude[0].lower() for occupation_exclude in occupation_exclude_table]
+
+        occupation_list = []
+        # get attributes Occupation
+        for attribute_elem in self.familytree_root.findall(self.xmlns+"people"+"/"+self.xmlns+"person"+"/"+self.xmlns+"attribute"):
+            attribute_type = attribute_elem.get('type')
+            attribute_value = attribute_elem.get('value')
+            if attribute_type == 'Beroep':
+                occupation = attribute_value
+                occupation = replace_words(occupation_replacement_table, occupation)
+                # split occupation string in words
+                for occupation_word in occupation.split():
+                    occupation_list.append(occupation_word.lower())
+
+        # Filter duplicates and words from (in this order) stop_words_list,
+        # place_words_list and occupation_exclude_words_list    
+        occupation_list = filter_duplicates_and_special_words(
+            (stopword_words_list, place_words_list, occupation_exclude_words_list),
+            occupation_list)
+
+        # sort if necessary
+        if sort == 'Asc':
+            occupation_list.sort()
+        elif sort == 'Desc':
+            occupation_list.sort(reverse=True)
+        elif sort is None:
+            pass    
+
+        return (occupation_list, _OCCUPATION_FIELDNAMES)
+
     def get_person_list(self, include_none_dates: bool = False,
                               sort_by_birthdate: bool = False,
                               include_empty_residence: bool = False,
                               include_empty_occupation: bool = False) -> (list, list):
+        _PERSON_FIELDNAMES = ("Person Handle", "Person ID", "Names List",
+                              "Gender", "Birth Date", "Occupation",
+                              "Residence", "Relatives List")
+
         def get_key_birth_date_sort_value(person_tuple):
             birth_date = person_tuple[COL_PERSON_BIRTH_DATE]
             if birth_date:
@@ -1029,7 +1228,7 @@ class MLGrampsConnect:
         if sort_by_birthdate:
             person_list.sort(key=get_key_birth_date_sort_value)
             
-        return (person_list, PERSON_FIELDNAMES)
+        return (person_list, _PERSON_FIELDNAMES)
 
     def get_connection_list(self, person_list: list,
                                   features: tuple, 
@@ -1038,7 +1237,8 @@ class MLGrampsConnect:
                                   n_random_conn_pp: int = 0,
                                   randomseed: int = None,
                                   include_none_dates: bool = False,
-                                  max_abs_age_delta: int = ABS_AGE_DELTA_ONE_GENERATION) -> (list, list, list):
+                                  max_abs_age_delta: int = ABS_AGE_DELTA_ONE_GENERATION,
+                                  **kwargs_features) -> (list, list, list):
         """ person_list: input data
             features: tuple of features examined in the input and added as columns in the output
             linktype_mode: 'ByGender' | 'Neutral' (default: 'ByGender')
@@ -1048,6 +1248,7 @@ class MLGrampsConnect:
                 Include connection for which the birth_date of one or both persons
                 is None. In include such connection the Age Delta cound not be calculated.
             max_abs_age_delta: int (default: ABS_AGE_DELTA_ONE_GENERATION)
+            **kwargs_features
         """
 
         # set feature object list
@@ -1116,7 +1317,8 @@ class MLGrampsConnect:
                         featurevalue, result = mlfeature.get_value(mainperson, linkperson, linktype,
                             name_similarity_mode=name_similarity_mode,
                             include_none_dates=include_none_dates,
-                            max_abs_age_delta=max_abs_age_delta)
+                            max_abs_age_delta=max_abs_age_delta,
+                            **kwargs_features)
                         if result:
                             connection = connection + (featurevalue,)
                         else:
@@ -1159,7 +1361,8 @@ class MLGrampsConnect:
                             featurevalue, result = mlfeature.get_value(mainperson, linkperson, linktype,
                                 name_similarity_mode=name_similarity_mode,
                                 include_none_dates=include_none_dates,
-                                max_abs_age_delta=max_abs_age_delta)
+                                max_abs_age_delta=max_abs_age_delta,
+                                **kwargs_features)
                             if result:
                                 connection = connection + (featurevalue,)
                             else:
@@ -1184,7 +1387,8 @@ class MLGrampsConnect:
                             name_similarity_mode: tuple = ("LevenshteinDistanceRelative", _LEVENSHTEIN_DISTANCE_THRESHOLD),
                             include_none_dates: bool = False,
                             max_abs_age_delta: int = ABS_AGE_DELTA_ONE_GENERATION,
-                            n_proc: int = -1) -> list:
+                            n_proc: int = -1,
+                            **kwargs_features) -> list:
         """
             include_none_dates: bool (default: Fales)
                 Include connection which for which the birth_date of one or both persons
@@ -1200,7 +1404,8 @@ class MLGrampsConnect:
                                 lp_idx_list: list = None,
                                 name_similarity_mode: tuple = None,
                                 include_none_dates: bool = False,
-                                max_abs_age_delta: int = ABS_AGE_DELTA_ONE_GENERATION):
+                                max_abs_age_delta: int = ABS_AGE_DELTA_ONE_GENERATION,
+                                **kwargs_features):
             args = None
             # get linkperson by index
             linkperson = person_list[lp_idx]
@@ -1211,7 +1416,8 @@ class MLGrampsConnect:
                     age_delta, result = mlfeature.get_value(mainperson, linkperson, linktype,
                         name_similarity_mode=name_similarity_mode,
                         include_none_dates=include_none_dates,
-                        max_abs_age_delta=max_abs_age_delta)
+                        max_abs_age_delta=max_abs_age_delta,
+                        **kwargs_features)
                     if result:
                         # Exclude the connection of a person to himself/herself
                         # and links that belongs to the connection_list
@@ -1222,7 +1428,8 @@ class MLGrampsConnect:
                                     max_abs_age_delta,
                                     mp_idx, person_list[mp_idx],
                                     lp_idx, person_list[lp_idx],
-                                    linktype, age_delta)
+                                    linktype, age_delta,
+                                    kwargs_features)
                     break
             return args
         
@@ -1291,7 +1498,8 @@ class MLGrampsConnect:
                                            lp_idx_list=lp_idx_list,
                                            name_similarity_mode=name_similarity_mode,
                                            include_none_dates=include_none_dates,
-                                           max_abs_age_delta=max_abs_age_delta)
+                                           max_abs_age_delta=max_abs_age_delta,
+                                           **kwargs_features)
                 if args:
                     if use_multiprocesses:
                         args_list.append(args)
@@ -1313,7 +1521,8 @@ class MLGrampsConnect:
                                            lp_idx_list=lp_idx_list,
                                            name_similarity_mode=name_similarity_mode,
                                            include_none_dates=include_none_dates,
-                                           max_abs_age_delta=max_abs_age_delta)
+                                           max_abs_age_delta=max_abs_age_delta,
+                                           **kwargs_features)
                 if args:
                     if use_multiprocesses:
                         args_list.append(args)
@@ -1341,7 +1550,7 @@ class MLGrampsConnect:
 
 ###################################################################
 #
-# Test
+# Example / Test
 #
 ###################################################################
 
@@ -1369,7 +1578,62 @@ if __name__ == "__main__":
     mlgc.load(gramps_filename)
 
     # ---------------------------------------------------------------------
-    # Step 2: Get person_list 
+    # Step 2: Load occupation_table and supporting tables
+    #         All "occupations" including a generalised form of it in
+    #         the field "profession" and the kind of area of it in "sector"
+    # ---------------------------------------------------------------------
+
+    # Load occupation replacements
+    occupation_replacement_table_csv = cur_dir_path + "/" + "occupation_replacement_table.csv"
+    occupation_replacement_table, occupation_replacement_headings = import_list_from_csv(occupation_replacement_table_csv, has_heading=True)
+    
+    # Load stopwords
+    stopword_table_csv = cur_dir_path + "/" + "stopword_table.csv"
+    stopword_table, stopword_headings = import_list_from_csv(stopword_table_csv, has_heading=True)
+    stopword_words_list = [stopword[0].lower() for stopword in stopword_table]
+
+    # Load places
+    place_table_csv = cur_dir_path + "/" + "place_table.csv"
+    place_table, place_headings = import_list_from_csv(place_table_csv, has_heading=True)
+    place_words_list = [place[0].lower() for place in place_table]
+
+    # Load occupation excludes
+    occupation_exclude_table_csv = cur_dir_path + "/" + "occupation_exclude_table.csv"
+    occupation_exclude_table, occupation_exclude_headings = import_list_from_csv(occupation_exclude_table_csv, has_heading=True)
+    occupation_exclude_words_list = [occupation_exclude[0].lower() for occupation_exclude in occupation_exclude_table]
+
+    # Set occupation_table filename
+    occupation_table_filename = cur_dir_path + "/" + "occupation_table.csv"
+    # load occupation_table
+    GLOBAL_occupation_table, GLOBAL_occupation_table_headings = import_list_from_csv(
+        occupation_table_filename, has_heading=True, delimiter=';')
+
+    # ---------------------------------------------------------------------
+    # Option 2a: Get option_list occupation_list and save it as CSV file
+    #            List of all occuring occupations
+    #            This list is only be used to manually create an
+    #            occupation_table which is stored also in a CSV file.
+    #            This table is load an used in the following steps.
+    # ---------------------------------------------------------------------
+
+    # Get occupation_list
+    occupation_list, occupation_list_fieldnames = mlgc.get_occupation_list(
+        occupation_replacement_table=occupation_replacement_table,
+        stopword_words_list=stopword_words_list,
+        place_words_list=place_words_list,
+        occupation_exclude_words_list=occupation_exclude_words_list,
+        sort="Asc")
+    print("{} | Number of occupations: {:,}".format(datetime.now() - now_begin, len(occupation_list)))
+
+    # Save occupation_list
+    occupation_list_csv = cur_dir_path + "/" + "occupation_list.csv"
+    save_list_as_csv(occupation_list_csv,
+                     occupation_list, occupation_list_fieldnames)
+    print("{} | Filesize occupation_list.csv: {:,}".format(
+        datetime.now() - now_begin, os.path.getsize(occupation_list_csv)))
+
+    # ---------------------------------------------------------------------
+    # Step 3: Get person_list 
     #         List of persons with all relevant data for feature generation
     # ---------------------------------------------------------------------
     
@@ -1381,17 +1645,17 @@ if __name__ == "__main__":
     print("{} | Number of persons: {:,}".format(datetime.now() - now_begin, len(person_list)))
 
     # ---------------------------------------------------------------------
-    # Option 2a: Save person_list as CSV file
+    # Option 3a: Save person_list as CSV file
     # ---------------------------------------------------------------------
 
     person_list_csv = cur_dir_path + "/" + "person_list.csv"
     save_list_as_csv(person_list_csv,
-                     person_list, PERSON_FIELDNAMES)
+                     person_list, person_list_fieldnames)
     print("{} | Filesize person_list.csv: {:,}".format(
         datetime.now() - now_begin, os.path.getsize(person_list_csv)))
 
     # ---------------------------------------------------------------------
-    # Step 3: Init parameters different job settings (if necessary) 
+    # Step 4: Init parameters different job settings (if necessary) 
     # ---------------------------------------------------------------------    
 
     # set features
@@ -1400,7 +1664,7 @@ if __name__ == "__main__":
     FEAT_SURNAME_SIMILARITY = "SurnameSimilarity"
     FEAT_OCCUPATION_CORRESPONDENCE = "OccupationCorrespondence"
     FEAT_RESIDENCE_CORRESPONDENCE = "ResidenceCorrespondence"
-    FEAT_KNOWN_LINKTYPE = "KnownLinktype"
+    # FEAT_KNOWN_LINKTYPE = "KnownLinktype"
     FEAT_N_SIBLINGS_EQUALITY = "NumberOfSiblingsEquality"
     # set features_sets
     # features_sets = ((FEAT_GENDER_COMBINATION,
@@ -1435,11 +1699,18 @@ if __name__ == "__main__":
             for n_random_conn_pp in temp_n_random_conn_pps:     
             
                 # ---------------------------------------------------------------------
-                # Step 4: Get connection_list
+                # Step 5: Get connection_list
                 #         For ML model building (classification): feature list and
                 #         target (LinkType) regarding relations between two persons.
                 #         Including indices to persons in the person_list.
                 # ---------------------------------------------------------------------
+
+                kwargs_features = {'use_occupation_table': True,
+                                   'occupation_replacement_table': occupation_replacement_table,
+                                   'stopword_words_list': stopword_words_list,
+                                   'place_words_list': place_words_list,
+                                   'occupation_exclude_words_list': occupation_exclude_words_list,
+                                   'occupation_table': GLOBAL_occupation_table}
 
                 connection_list, connection_fieldnames, person_connection_index_list = \
                     mlgc.get_connection_list(person_list=person_list,
@@ -1448,13 +1719,14 @@ if __name__ == "__main__":
                                              name_similarity_mode=('LevenshteinDistanceRelative', 3),
                                              n_random_conn_pp=n_random_conn_pp,
                                              randomseed=None,
-                                             max_abs_age_delta=ABS_AGE_DELTA_ONE_GENERATION)
+                                             max_abs_age_delta=ABS_AGE_DELTA_ONE_GENERATION,
+                                             **kwargs_features)
                 print("{} | Number of connections: {:,} - (Features: {}, Linktype: {}, n_random_conn_pp: {})".format(
                     datetime.now() - now_begin, len(connection_list),
                     len(features_set), linktype_mode, n_random_conn_pp))
 
                 # ---------------------------------------------------------------------
-                # Option 4a: Save connection_list and person_connection_index_list as
+                # Option 5a: Save connection_list and person_connection_index_list as
                 #            CSV files
                 # ---------------------------------------------------------------------
 
@@ -1471,7 +1743,7 @@ if __name__ == "__main__":
                     datetime.now() - now_begin, os.path.getsize(person_connection_index_list_csv)))
 
                 # ---------------------------------------------------------------------
-                # Step 5: Get personlink_list
+                # Step 6: Get personlink_list
                 #         For ML model operation (classification): feature list and
                 #         known targets between any combination of persons within a
                 #         maximum age difference.
@@ -1484,12 +1756,13 @@ if __name__ == "__main__":
                         features=features_set,
                         name_similarity_mode=('LevenshteinDistanceBool', 3),
                         include_none_dates=False,
-                        max_abs_age_delta=ABS_AGE_DELTA_ONE_GENERATION, n_proc=-1)
+                        max_abs_age_delta=ABS_AGE_DELTA_ONE_GENERATION, n_proc=-1,
+                        **kwargs_features)
                 print("{} | Number of personlinks: {:,}".format(
                     datetime.now() - now_begin, len(personlink_list)))
         
                 # ---------------------------------------------------------------------
-                # Option 5a: Save personlink_list as CSV file
+                # Option 6a: Save personlink_list as CSV file
                 # ---------------------------------------------------------------------
 
                 personlink_list_csv = cur_dir_path + "/" + "personlink_list.csv"

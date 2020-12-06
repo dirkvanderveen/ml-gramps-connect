@@ -3,3 +3,10 @@ connection_list.csv
 person_connection_index_list.csv
 person_list.csv
 personlink_list.csv
+occupation_list.csv
+occupation_exclude_table.csv
+occupation_replacement_table.csv
+occupation_table.csv
+occupation_table.numbers
+stopword_table.csv
+place_table.csv
